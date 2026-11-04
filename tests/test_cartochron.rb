@@ -89,6 +89,77 @@ class CartochronModuleTest < Minitest::Test
     assert_equal 'run-a', JSON.parse(@http.request_sent.body)['track_id']
   end
 
+  def test_channel_id_is_sent_only_when_configured
+    Net::HTTP.stub(:new, @http) do
+      @module.submit_position(URI('http://127.0.0.1:8765/api/position'),
+                              47, 28, '', '', 'run-a', nil, 'msf.oneplus')
+    end
+    assert_equal 'msf.oneplus', JSON.parse(@http.request_sent.body)['channel_id']
+    assert_nil JSON.parse(@http.request_sent.body)['source_id']
+
+    Net::HTTP.stub(:new, @http) do
+      @module.submit_position(URI('http://127.0.0.1:8765/api/position'),
+                              47, 28, '', '', 'run-b')
+    end
+    refute JSON.parse(@http.request_sent.body).key?('channel_id')
+  end
+
+  def test_channel_acknowledgment_requires_exact_201_echo
+    accepted = Net::HTTPCreated.new('1.1', '201', 'Created')
+    accepted.define_singleton_method(:body) { '{"channel_id":"msf.oneplus"}' }
+    assert @module.channel_acknowledged?(accepted, 'msf.oneplus')
+    refute @module.channel_acknowledged?(accepted, 'msf.lg')
+
+    missing = Net::HTTPCreated.new('1.1', '201', 'Created')
+    missing.define_singleton_method(:body) { '{"lat":47,"lon":28}' }
+    refute @module.channel_acknowledged?(missing, 'msf.oneplus')
+    invalid = Net::HTTPCreated.new('1.1', '201', 'Created')
+    invalid.define_singleton_method(:body) { 'not JSON' }
+    refute @module.channel_acknowledged?(invalid, 'msf.oneplus')
+    empty = Net::HTTPCreated.new('1.1', '201', 'Created')
+    empty.define_singleton_method(:body) { '' }
+    refute @module.channel_acknowledged?(empty, 'msf.oneplus')
+    old_success = Net::HTTPOK.new('1.1', '200', 'OK')
+    old_success.define_singleton_method(:body) { '{"channel_id":"msf.oneplus"}' }
+    refute @module.channel_acknowledged?(old_success, 'msf.oneplus')
+  end
+
+  def test_invalid_channel_id_stops_before_acquisition
+    ['', 'msf.oneplus', 'a' * 64].each do |good|
+      sent, _logs, _console = streamer_fixture([], positions: [nil], settings: {'CHANNEL_ID' => good})
+      assert_raises(Interrupt) { @module.run }
+      assert_empty sent
+    end
+    ['bad space', '.hidden', 'é', 'a' * 65, 'x/y'].each do |bad|
+      _sent, _logs, console = streamer_fixture([], settings: {'CHANNEL_ID' => bad})
+      @module.run
+      assert console.any? { |message| message.include?('CHANNEL_ID') }, bad
+    end
+  end
+
+  def test_channel_acknowledgment_failure_stops_job_without_repeating
+    response = Net::HTTPCreated.new('1.1', '201', 'Created')
+    response.define_singleton_method(:body) { '{"lat":47,"lon":28}' }
+    sent, logs, console = streamer_fixture([response, response],
+                                           settings: {'CHANNEL_ID' => 'msf.oneplus'})
+    @module.run
+    assert_equal 1, sent.length
+    assert_empty console
+    assert logs.any? { |kind, msg| kind == :warn && msg.include?('did not acknowledge CHANNEL_ID') }
+    assert logs.any? { |kind, msg| kind == :info && msg.include?('rejected=1') && msg.include?('Stopped') }
+  end
+
+  def test_valid_channel_runs_continue_and_keep_distinct_run_ids
+    accepted = Net::HTTPCreated.new('1.1', '201', 'Created')
+    accepted.define_singleton_method(:body) { '{"channel_id":"msf.oneplus"}' }
+    first, logs, _ = streamer_fixture([accepted], settings: {'CHANNEL_ID' => 'msf.oneplus'})
+    assert_raises(Interrupt) { @module.run }
+    assert logs.any? { |kind, msg| kind == :info && msg.include?('Ingestion established') }
+    second, _logs, _ = streamer_fixture([accepted], settings: {'CHANNEL_ID' => 'msf.oneplus'})
+    assert_raises(Interrupt) { @module.run }
+    refute_equal first.first, second.first
+  end
+
   def test_enrolled_source_reused_across_jobs_with_distinct_runs
     success = Net::HTTPCreated.new('1.1', '201', 'Created')
     source = 'src_' + 'a' * 24
@@ -122,7 +193,8 @@ class CartochronModuleTest < Minitest::Test
     calls = 0
     phone = Struct.new(:android).new(gps)
     datastore = { 'INTERVAL' => interval, 'ENDPOINT' => 'http://127.0.0.1:8765/api/position',
-                  'MAP_USER' => '', 'MAP_PASSWORD' => '', 'TRACK_ID' => '', 'SOURCE_ID' => '' }.merge(settings)
+                  'MAP_USER' => '', 'MAP_PASSWORD' => '', 'TRACK_ID' => '', 'CHANNEL_ID' => '',
+                  'SOURCE_ID' => '' }.merge(settings)
     sent = []
     logs = []
     console = []
@@ -135,7 +207,7 @@ class CartochronModuleTest < Minitest::Test
     @module.define_singleton_method(:print_good) { |message| console << message }
     @module.define_singleton_method(:print_status) { |message| console << message }
     @module.define_singleton_method(:print_error) { |message| console << message }
-    @module.define_singleton_method(:submit_position) do |_uri, _lat, _lon, _user, _password, track, _source|
+    @module.define_singleton_method(:submit_position) do |_uri, _lat, _lon, _user, _password, track, _source, _channel|
       sent << track
       response = responses.fetch(calls - 1)
       raise response if response.is_a?(Exception)

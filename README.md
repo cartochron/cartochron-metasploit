@@ -46,9 +46,30 @@ plaintext HTTP on untrusted networks. The receiver's Docker Compose setup
 uses Basic authentication by default.
 
 Leave `TRACK_ID` empty for a new random recording-run ID per job. Set
+`CHANNEL_ID` to a stable, operator-chosen channel (for example, `msf.oneplus`)
+so Monitor follows newer jobs without merging recording runs. The optional
+channel is independent of the enrolled source and must be 1–64 ASCII letters,
+digits, dots, underscores, or hyphens, starting with a letter or digit. Set
 `SOURCE_ID` to an already enrolled Cartochron source identifier if you want
-independent runs associated with one descriptive source. Neither identifier
-is an authentication credential. `INTERVAL` is measured in seconds.
+independent runs associated with one descriptive source. None of these
+identifiers authenticates a physical device. `INTERVAL` is measured in seconds.
+
+For example, with a configured phone and a receiver supporting channel IDs:
+
+```text
+msf6 post(android/gather/cartochron) > set CHANNEL_ID msf.oneplus
+msf6 post(android/gather/cartochron) > unset TRACK_ID
+msf6 post(android/gather/cartochron) > run -j
+```
+
+**Upgrade Cartochron first.** When `CHANNEL_ID` is set, the adapter requires
+HTTP 201 with the same `channel_id` in the receiver's JSON acknowledgment.
+An older receiver may have accepted the *first* observation while ignoring
+that field; the adapter stops that job and logs a compatibility warning
+instead of silently continuing with missing provenance. With `CHANNEL_ID`
+unset, it retains the legacy request and success behavior. The channel and
+source are independent assertions, immutable within each run; do not reuse
+`TRACK_ID` with different source/channel options.
 
 ```text
 msf6 > jobs -l                # Show background jobs
