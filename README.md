@@ -10,6 +10,9 @@ is not installed by this repository.
 provider's **last-known** position. A successful poll is not proof of a new
 GPS fix, movement, or current location; the age and accuracy are unavailable.
 Cartochron records its *receipt time*, not the acquisition time of the fix.
+The adapter tags accepted submissions with reported `provider: network`; it
+does not fabricate a measurement timestamp or accuracy. Older recordings
+remain unchanged.
 
 ## Install
 

@@ -67,7 +67,8 @@ class CartochronModuleTest < Minitest::Test
     assert_equal 'application/json', @http.request_sent['Content-Type']
     assert_equal 'Basic ' + ['operator:private-password'].pack('m0'),
                  @http.request_sent['Authorization']
-    assert_equal({ 'lat' => 47.0, 'lon' => 28.0 }, JSON.parse(@http.request_sent.body))
+    assert_equal({ 'lat' => 47.0, 'lon' => 28.0, 'provider' => 'network' },
+                 JSON.parse(@http.request_sent.body))
   end
 
   def test_track_id_is_transmitted_with_observation
@@ -75,8 +76,21 @@ class CartochronModuleTest < Minitest::Test
       @module.submit_position(URI('http://127.0.0.1:8765/api/position'),
                               47.0, 28.0, '', '', 'lab-run-1')
     end
-    assert_equal({ 'lat' => 47.0, 'lon' => 28.0, 'track_id' => 'lab-run-1' },
+    assert_equal({ 'lat' => 47.0, 'lon' => 28.0, 'provider' => 'network',
+                   'track_id' => 'lab-run-1' },
                  JSON.parse(@http.request_sent.body))
+  end
+
+  def test_network_provider_does_not_invent_a_fix_time_or_accuracy
+    Net::HTTP.stub(:new, @http) do
+      @module.submit_position(URI('http://127.0.0.1:8765/api/position'),
+                              47.75, 27.88, '', '', 'run-a', nil, 'msf.lg')
+    end
+    observation = JSON.parse(@http.request_sent.body)
+    assert_equal 'network', observation['provider']
+    assert_equal 'msf.lg', observation['channel_id']
+    refute observation.key?('measured_ms')
+    refute observation.key?('accuracy_m')
   end
 
   def test_source_id_is_optional_and_sent_as_protocol_field

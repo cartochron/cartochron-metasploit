@@ -169,7 +169,9 @@ class MetasploitModule < Msf::Post
 
     request = Net::HTTP::Post.new(uri.request_uri, 'Content-Type' => 'application/json')
     request.basic_auth(username, password) unless username.empty?
-    observation = { lat: lat, lon: lon }
+    # Android geolocate uses the last-known network provider. This is a
+    # provider claim, not a new measurement or an accuracy estimate.
+    observation = { lat: lat, lon: lon, provider: 'network' }
     observation[:track_id] = track_id if track_id
     observation[:source_id] = source_id if source_id
     observation[:channel_id] = channel_id if channel_id
