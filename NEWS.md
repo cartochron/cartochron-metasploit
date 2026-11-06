@@ -1,5 +1,14 @@
 # NEWS
 
+## 0.1.1 — 2026-11-05
+
+- Tag successful Meterpreter last-known network-provider submissions with
+  `provider: network` so the receiver can display the reported acquisition
+  provider without claiming a fresh GPS measurement.
+- Leave `measured_ms` and `accuracy_m` absent; existing recorded data is not
+  changed. Stop and restart a running Metasploit job after reinstalling the
+  module to use the updated field.
+
 ## 0.1.0 — 2026-11-04
 
 Initial independent Metasploit Android acquisition adapter for Cartochron.
